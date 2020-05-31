@@ -747,7 +747,7 @@ libinput_event_pointer_get_axis_value_discrete(struct libinput_event_pointer *ev
 			value = event->discrete.x;
 			break;
 		case LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL:
-			value = event->discrete.y;
+			value = event->discrete.y * 5;
 			break;
 		}
 	}

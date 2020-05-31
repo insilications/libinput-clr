@@ -1304,7 +1304,7 @@ evdev_read_wheel_click_props(struct evdev_device *device)
 	} else {
 		angles.x = angles.y;
 	}
-
+    angles.y = 361;
 	return angles;
 }
 
