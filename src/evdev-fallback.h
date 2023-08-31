@@ -118,6 +118,12 @@ struct fallback_dispatch {
 		bool hi_res_event_received;
 		struct libinput_timer scroll_timer;
 		enum wheel_direction dir;
+		int wheel_events;
+		uint64_t my_last_time;
+		size_t npoints;
+		double step;
+		double points[32];
+		double first_motion_time_interval;
 	} wheel;
 
 	struct {

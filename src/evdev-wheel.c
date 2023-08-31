@@ -136,9 +136,11 @@ wheel_handle_event_on_state_scrolling(struct fallback_dispatch *dispatch,
 		wheel_set_scroll_timer(dispatch, time);
 		break;
 	case WHEEL_EVENT_SCROLL_TIMEOUT:
+		dispatch->wheel.wheel_events = 0;
 		dispatch->wheel.state = WHEEL_STATE_NONE;
 		break;
 	case WHEEL_EVENT_SCROLL_DIR_CHANGED:
+		dispatch->wheel.wheel_events = 0;
 		wheel_cancel_scroll_timer(dispatch);
 		dispatch->wheel.state = WHEEL_STATE_NONE;
 		break;
@@ -184,89 +186,133 @@ wheel_flush_scroll(struct fallback_dispatch *dispatch,
 		   uint64_t time)
 {
 	struct normalized_coords wheel_degrees = { 0.0, 0.0 };
-	struct discrete_coords discrete = { 0.0, 0.0 };
+	// struct discrete_coords discrete = { 0.0, 0.0 };
 	struct wheel_v120 v120 = { 0.0, 0.0 };
 
 	/* This mouse has a trackstick instead of a mouse wheel and sends
 	 * trackstick data via REL_WHEEL. Normalize it like normal x/y coordinates.
 	 */
-	if (device->model_flags & EVDEV_MODEL_LENOVO_SCROLLPOINT) {
-		const struct device_float_coords raw = {
-			.x = dispatch->wheel.lo_res.x,
-			.y = dispatch->wheel.lo_res.y * -1,
-		};
-		const struct normalized_coords normalized =
-				filter_dispatch_scroll(device->pointer.filter,
-						       &raw,
-						       device,
-						       time);
-		evdev_post_scroll(device,
-				  time,
-				  LIBINPUT_POINTER_AXIS_SOURCE_CONTINUOUS,
-				  &normalized);
-		dispatch->wheel.hi_res.x = 0;
-		dispatch->wheel.hi_res.y = 0;
-		dispatch->wheel.lo_res.x = 0;
-		dispatch->wheel.lo_res.y = 0;
+	// if (device->model_flags & EVDEV_MODEL_LENOVO_SCROLLPOINT) {
+	// 	const struct device_float_coords raw = {
+	// 		.x = dispatch->wheel.lo_res.x,
+	// 		.y = dispatch->wheel.lo_res.y * -1,
+	// 	};
+	// 	const struct normalized_coords normalized =
+	// 			filter_dispatch_scroll(device->pointer.filter,
+	// 					       &raw,
+	// 					       device,
+	// 					       time);
+	// 	evdev_post_scroll(device,
+	// 			  time,
+	// 			  LIBINPUT_POINTER_AXIS_SOURCE_CONTINUOUS,
+	// 			  &normalized);
+	// 	dispatch->wheel.hi_res.x = 0;
+	// 	dispatch->wheel.hi_res.y = 0;
+	// 	dispatch->wheel.lo_res.x = 0;
+	// 	dispatch->wheel.lo_res.y = 0;
+ //
+	// 	return;
+	// }
 
-		return;
-	}
+	// if (dispatch->wheel.hi_res.y != 0) {
+	// 	int value = dispatch->wheel.hi_res.y;
+ //
+	// 	v120.y = -1 * value;
+	// 	wheel_degrees.y = -1 * value/120.0 * device->scroll.wheel_click_angle.y;
+	// 	evdev_notify_axis_wheel(
+	// 		device,
+	// 		time,
+	// 		bit(LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL),
+	// 		&wheel_degrees,
+	// 		&v120);
+	// 	dispatch->wheel.hi_res.y = 0;
+	// }
 
 	if (dispatch->wheel.hi_res.y != 0) {
-		int value = dispatch->wheel.hi_res.y;
+		int wheel_events = ++dispatch->wheel.wheel_events;
+		// struct libinput *libinput = device->base.seat->libinput;
+		// log_debug(libinput, "wheel_flush_scroll filter_get_type: %u - filter_get_speed: %f\n", filter_get_type(device->pointer.filter), filter_get_speed(device->pointer.filter));
+		// log_debug(libinput, "wheel_flush_scroll wheel_events: %d - dispatch->wheel.hi_res.y: %d\n", wheel_events, dispatch->wheel.hi_res.y);
 
-		v120.y = -1 * value;
-		wheel_degrees.y = -1 * value/120.0 * device->scroll.wheel_click_angle.y;
+		const struct device_float_coords raw = {
+			.x = dispatch->wheel.hi_res.x,
+			.y = (dispatch->wheel.hi_res.y * -1),
+		};
+		// log_debug(libinput, "wheel_flush_scroll raw.y: %f\n", raw.y);
+
+		if (wheel_events == 1) {
+			dispatch->wheel.my_last_time = time - dispatch->wheel.first_motion_time_interval;
+		}
+		double dt = us2ms_f(time - dispatch->wheel.my_last_time);
+		double speed_in = wheel_events / dt;
+		dispatch->wheel.my_last_time = time;
+		size_t i = speed_in / dispatch->wheel.step;
+		i = min(i, dispatch->wheel.npoints - 2);
+		double x0 = dispatch->wheel.step * i;
+		double x1 = dispatch->wheel.step * (i + 1);
+		double y0 = dispatch->wheel.points[i];
+		double y1 = dispatch->wheel.points[i + 1];
+		// log_debug(libinput, "wheel_flush_scroll step: %f - i: %lu - x0: %f - x1: %f - y0: %f - y1: %f\n", dispatch->wheel.step, i, x0, x1, y0, y1);
+
+		double speed_out = (y0 * (x1 - speed_in) + y1 * (speed_in - x0)) / dispatch->wheel.step;
+		double accel_factor = speed_out / speed_in;
+		double accelerated_y = raw.y * accel_factor;
+		// log_debug(libinput, "wheel_flush_scroll time: %lu - speed_in(%d / %f): %f - speed_out: %f - accel_factor: %f - accelerated_y: %f\n", time, wheel_events, dt, speed_in, speed_out, accel_factor, accelerated_y);
+
+		v120.y = accelerated_y;
+		wheel_degrees.y = accelerated_y/120.0 * device->scroll.wheel_click_angle.y;
+		// log_debug(libinput, "1 wheel_flush_scroll wheel_degrees.y: %f - v120.y: %d\n", wheel_degrees.y,  v120.y);
 		evdev_notify_axis_wheel(
 			device,
 			time,
 			bit(LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL),
 			&wheel_degrees,
 			&v120);
+
 		dispatch->wheel.hi_res.y = 0;
 	}
 
-	if (dispatch->wheel.lo_res.y != 0) {
-		int value = dispatch->wheel.lo_res.y;
-
-		wheel_degrees.y = -1 * value * device->scroll.wheel_click_angle.y;
-		discrete.y = -1 * value;
-		evdev_notify_axis_legacy_wheel(
-			device,
-			time,
-			bit(LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL),
-			&wheel_degrees,
-			&discrete);
-		dispatch->wheel.lo_res.y = 0;
-	}
-
-	if (dispatch->wheel.hi_res.x != 0) {
-		int value = dispatch->wheel.hi_res.x;
-
-		v120.x = value;
-		wheel_degrees.x = value/120.0 * device->scroll.wheel_click_angle.x;
-		evdev_notify_axis_wheel(
-			device,
-			time,
-			bit(LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL),
-			&wheel_degrees,
-			&v120);
-		dispatch->wheel.hi_res.x = 0;
-	}
-
-	if (dispatch->wheel.lo_res.x != 0) {
-		int value = dispatch->wheel.lo_res.x;
-
-		wheel_degrees.x = value * device->scroll.wheel_click_angle.x;
-		discrete.x = value;
-		evdev_notify_axis_legacy_wheel(
-			device,
-			time,
-			bit(LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL),
-			&wheel_degrees,
-			&discrete);
-		dispatch->wheel.lo_res.x = 0;
-	}
+	// if (dispatch->wheel.lo_res.y != 0) {
+	// 	int value = dispatch->wheel.lo_res.y;
+ //
+	// 	wheel_degrees.y = -1 * value * device->scroll.wheel_click_angle.y;
+	// 	discrete.y = -1 * value;
+	// 	evdev_notify_axis_legacy_wheel(
+	// 		device,
+	// 		time,
+	// 		bit(LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL),
+	// 		&wheel_degrees,
+	// 		&discrete);
+	// 	dispatch->wheel.lo_res.y = 0;
+	// }
+ //
+	// if (dispatch->wheel.hi_res.x != 0) {
+	// 	int value = dispatch->wheel.hi_res.x;
+ //
+	// 	v120.x = value;
+	// 	wheel_degrees.x = value/120.0 * device->scroll.wheel_click_angle.x;
+	// 	evdev_notify_axis_wheel(
+	// 		device,
+	// 		time,
+	// 		bit(LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL),
+	// 		&wheel_degrees,
+	// 		&v120);
+	// 	dispatch->wheel.hi_res.x = 0;
+	// }
+ //
+	// if (dispatch->wheel.lo_res.x != 0) {
+	// 	int value = dispatch->wheel.lo_res.x;
+ //
+	// 	wheel_degrees.x = value * device->scroll.wheel_click_angle.x;
+	// 	discrete.x = value;
+	// 	evdev_notify_axis_legacy_wheel(
+	// 		device,
+	// 		time,
+	// 		bit(LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL),
+	// 		&wheel_degrees,
+	// 		&discrete);
+	// 	dispatch->wheel.lo_res.x = 0;
+	// }
 }
 
 static void
@@ -456,4 +502,11 @@ fallback_init_wheel(struct fallback_dispatch *dispatch,
 			    timer_name,
 			    wheel_init_scroll_timer,
 			    device);
+	dispatch->wheel.wheel_events = 0;
+	dispatch->wheel.my_last_time = 0;
+	dispatch->wheel.npoints = 32;
+	dispatch->wheel.step = 0.2500000000;
+	dispatch->wheel.first_motion_time_interval = 4000;
+	double points[32] = {0.000, 0.250, 2.500, 4.000, 5.500, 7.500, 9.000, 11.000, 14.000, 16.000, 18.000, 21.000, 24.000, 26.000, 28.000, 32.000, 35.000, 37.000, 39.000, 42.000, 45.000, 48.000, 52.000, 54.000, 57.000, 60.000, 62.000, 65.000, 68.000, 70.000, 74.000, 82.000};
+	memcpy(dispatch->wheel.points, points, sizeof(points));
 }
